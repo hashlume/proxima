@@ -30,7 +30,7 @@ cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d
 
 mkdir -p "$SEEK"
 if [ "$HERE" = "$DEST" ]; then
-  chmod 755 "$SEEK/gpu_seeker.py"   # cloned straight into the install dir
+  : # cloned straight into the install dir: the file is already where it must be
 else
   install -m 755 "$HERE/seeker/gpu_seeker.py" "$SEEK/gpu_seeker.py"
 fi
@@ -43,10 +43,11 @@ esac
 
 if [ -n "$lib" ] && [ -f "$HERE/seeker/$lib" ]; then
   say "compute_cap $cap -> using prebuilt $lib"
-  if [ "$HERE" = "$DEST" ]; then
-    cp -f "$HERE/seeker/$lib" "$SEEK/libb2s.so"; chmod 755 "$SEEK/libb2s.so"
+  if [ "$HERE" = "$DEST" ] && [ "$lib" = "libb2s.so" ]; then
+    : # already named right for the client
   else
-    install -m 755 "$HERE/seeker/$lib" "$SEEK/libb2s.so"
+    cp -f "$HERE/seeker/$lib" "$SEEK/libb2s.so"
+    [ "$HERE" = "$DEST" ] || chmod 755 "$SEEK/libb2s.so"
   fi
 else
   arch="sm_$(echo "$cap" | tr -d '.')"
