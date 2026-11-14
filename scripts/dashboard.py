@@ -288,7 +288,7 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
     <div class="card"><div class="k">minted this run</div><div class="v" id="minted">–</div></div>
     <div class="card"><div class="k">our share of network</div><div class="v" id="share">–</div></div>
   </div>
-  <table><thead><tr><th>slot</th><th>transit</th><th>tx</th></tr></thead>
+  <table><thead><tr><th>slot</th><th>transit</th><th>when</th><th>tx</th></tr></thead>
   <tbody id="tb"></tbody></table>
 </div>
 
@@ -308,6 +308,9 @@ const dur = s => s == null ? '–' : s < 90 ? Math.round(s) + ' s'
 const gh = n => n == null ? '–' : (n / 1e9).toFixed(2);
 const age = ms => ms == null ? '–' : ms < 1500 ? 'now'
   : ms < 60000 ? (ms/1000).toFixed(0) + 's ago' : (ms/60000).toFixed(1) + 'm ago';
+const agoS = s => s == null ? '–' : s < 90 ? Math.round(s) + 's ago'
+  : s < 5400 ? Math.round(s/60) + 'm ago'
+  : s < 172800 ? (s/3600).toFixed(1) + 'h ago' : (s/86400).toFixed(1) + 'd ago';
 
 function kpi(k, v, cls, sub) {
   return '<div class="card"><div class="k">' + k + '</div><div class="v ' + (cls||'') + '">'
@@ -391,10 +394,12 @@ async function tick() {
   $('earnsub').textContent = ours.length
     ? ours.length + ' confirmed transit' + (ours.length > 1 ? 's' : '') + ' of ours'
     : 'no transit won yet';
-  $('tb').innerHTML = ours.map(t =>
-      '<tr><td>s' + t.slot + '</td><td>' + t.no + '</td>'
-      + '<td class="name" style="color:var(--good)">' + t.txid.slice(0, 22) + '…</td></tr>'
-    ).join('') || '<tr><td colspan="3" class="empty">nothing mined yet</td></tr>';
+  $('tb').innerHTML = ours.map(t => {
+      const ageS = (net.slot && t.slot) ? (net.slot - t.slot) * 10.24 : null;
+      return '<tr><td>s' + t.slot + '</td><td>' + t.no + '</td>'
+        + '<td style="color:var(--dim)">' + (ageS == null ? '–' : agoS(ageS)) + '</td>'
+        + '<td class="name" style="color:var(--good)">' + t.txid.slice(0, 22) + '…</td></tr>';
+    }).join('') || '<tr><td colspan="4" class="empty">nothing mined yet</td></tr>';
   $('ts').textContent = new Date().toLocaleTimeString();
   $('upd').textContent = 'live';
 }
