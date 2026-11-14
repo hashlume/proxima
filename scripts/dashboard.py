@@ -79,6 +79,42 @@ def log_loop():
             # lines stopped existing when the box moved to a single-process miner
             STATE["wins"] = len(ours)
             STATE["solved"] = len(re.findall(r"SOLVED transit #", mine))
+
+            # effort of the current round = attempts since our last confirmed transit,
+            # measured against 2^K, the expected work for one transit
+            lines = mine.splitlines()
+            start = 0
+            for i, ln in enumerate(lines):
+                if re.search(r"confirmed transit #\d+ .*? of ours", ln):
+                    start = i + 1
+            since = 0
+            for ln in lines[start:]:
+                m = re.search(r"no solution for slot \d+ after ([\d_]+) attempts", ln)
+                if m:
+                    since += int(m.group(1).replace("_", ""))
+            since += STATE["attempts"] or 0
+            k = STATE["k"]
+            STATE["attempts_since"] = since
+            STATE["effort"] = (since / (2 ** k) * 100) if (k and since) else None
+
+            # submissions: which box found what, and whether it won
+            conf = {o["no"] for o in ours}
+            subs = []
+            cur_k = cur_b = None
+            for ln in lines:
+                mk = re.search(r"difficulty K=(\d+)", ln)
+                mb = re.search(r"successor B=(\d+)", ln)
+                if mk:
+                    cur_k = int(mk.group(1))
+                if mb:
+                    cur_b = int(mb.group(1))
+                m = re.search(r"(SOLVED|IMPROVED) transit #(\d+); submitting (\d{6})-\d+-[0-9a-f]+\.{0,2}(?: from (\S+))?", ln)
+                if m:
+                    no = int(m.group(2))
+                    subs.append({"no": no, "slot": int(m.group(3)), "by": m.group(4) or "local",
+                                 "kind": m.group(1), "k": cur_k, "b": cur_b, "won": no in conf})
+            subs.sort(key=lambda x: x["slot"], reverse=True)
+            STATE["submissions"] = subs[:8]
         time.sleep(1)
 
 
@@ -241,6 +277,11 @@ tr:last-child td{border-bottom:none}
 .name{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
 .dim{color:var(--faint);font-weight:400}
 .bar{height:6px;border-radius:3px;background:#1d2330;overflow:hidden;min-width:70px}
+.meter{position:relative;height:12px;background:#1d2330;border-radius:6px;margin:10px 0 6px}
+.meter i{position:absolute;left:0;top:0;bottom:0;border-radius:6px;
+background:linear-gradient(90deg,#48d38a,#a8c95a 45%,#e0b354 70%,#e06c75);transition:width .6s}
+.meter b{position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:var(--dim);opacity:.8}
+.scale{display:flex;justify-content:space-between;color:var(--faint);font-size:11px}
 .bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#2b6cb0,#48d38a)}
 .host td{font-weight:600;padding-top:11px;padding-bottom:6px;color:var(--ink);background:var(--panel2)}
 .st{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:7px;vertical-align:1px}
@@ -256,6 +297,12 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
   <div><h1>Proxima mining</h1><div class="sub">__HOLDER__</div></div>
   <div class="live"><span class="dot"></span><span id="upd">connecting</span></div>
 </header>
+
+<div class="panel">
+  <div class="ph"><span class="k">current round progress</span><span class="n" id="efftxt">–</span></div>
+  <div class="meter"><b id="mark"></b><i id="fill" style="width:0%"></i></div>
+  <div class="scale"><span id="scalemin">0 %</span><span id="scalemid">100 % = the expected work for one transit</span><span id="scalemax">200 %</span></div>
+</div>
 
 <div class="hero">
   <div class="card hero-card">
@@ -297,9 +344,17 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
   <tbody id="tb"></tbody></table>
 </div>
 
+<div class="panel">
+  <div class="ph"><span class="k">solutions submitted</span><span class="n" id="subn">–</span></div>
+  <table><thead><tr><th>slot</th><th>when</th><th>transit</th><th>found by</th>
+  <th style="text-align:right">share k</th><th style="text-align:right">chain B</th>
+  <th>result</th></tr></thead><tbody id="subs"></tbody></table>
+</div>
+
 <div class="foot">
   <span>refreshed <b id="ts">–</b></span>
   <a href="/data">/data</a>
+  <a href="/log">/log</a>
   <a href="http://65.21.170.230:8001/monitor" target="_blank">network monitor</a>
   <a href="http://65.21.170.230:8001/dag_explorer" target="_blank">DAG explorer</a>
 </div>
@@ -382,7 +437,7 @@ async function tick() {
     kpi('difficulty', job.k != null ? job.k : (d.k != null ? d.k : '–'), 'warn', 'bits'),
     kpi('network share', d.net_share == null ? '–' : (d.net_share*100).toFixed(2), '', '%'),
     kpi('job slot', job.slot != null ? job.slot : (d.target_slot != null ? d.target_slot : '–'), 'acc'),
-    kpi('network transits', pro(net.mined), '', 'mined'),
+    kpi('last block', (d.our_transits && d.our_transits[0]) ? agoS((net.slot - d.our_transits[0].slot) * 10.24) : '–'),
     kpi('remaining', pro(Math.round(net.remaining||0)), '', 'PROX'),
     kpi('miners / 120 slots', pro(net.miners)),
     kpi('network pace', net.mean_pace == null ? '–' : Number(net.mean_pace).toFixed(2), '', 'slots'),
@@ -407,6 +462,28 @@ async function tick() {
     }).join('') || '<tr><td colspan="5" class="empty">nothing mined yet</td></tr>';
   $('ts').textContent = new Date().toLocaleTimeString();
   $('upd').textContent = 'live';
+  const eff = d.effort;
+  if (eff != null) {
+    const maxScale = eff <= 200 ? 200 : Math.ceil(eff / 100) * 100;
+    $('fill').style.width = Math.min(eff, maxScale) / maxScale * 100 + '%';
+    $('mark').style.left = (100 / maxScale * 100) + '%';
+    $('efftxt').textContent = eff.toFixed(2) + ' %'
+      + (eff > 100 ? '  ·  ' + (eff / 100).toFixed(2) + '× expected' : '');
+    $('scalemax').textContent = maxScale + ' %';
+    $('scalemid').textContent = maxScale === 200
+      ? '100 % = the expected work for one transit'
+      : '100 % = expected (scale 0–' + maxScale + ' %)';
+  }
+  const subs = d.submissions || [];
+  $('subn').textContent = subs.length ? 'last ' + subs.length : '';
+  $('subs').innerHTML = subs.map(s => {
+      const a = (net.slot && s.slot) ? (net.slot - s.slot) * 10.24 : null;
+      return '<tr><td>s' + s.slot + '</td><td style="color:var(--dim)">' + (a == null ? '–' : agoS(a)) + '</td>'
+        + '<td>' + s.no + '</td><td class="name" style="color:var(--acc)">' + s.by + '</td>'
+        + '<td style="text-align:right;color:var(--warn)">' + (s.k == null ? '–' : s.k) + '</td>'
+        + '<td style="text-align:right;color:var(--dim)">' + (s.b == null ? '–' : s.b) + '</td>'
+        + '<td class="' + (s.won ? 'mine' : '') + '">' + (s.won ? 'CONFIRMED' : 'lost') + '</td></tr>';
+    }).join('') || '<tr><td colspan="6" class="empty">no solutions yet</td></tr>';
 }
 tick(); setInterval(tick, 2000);
 </script></body></html>"""
@@ -417,6 +494,20 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/data"):
             body = json.dumps(snapshot()).encode()
             ctype = "application/json"
+        elif self.path.startswith("/log"):
+            with LOCK:
+                subs = list(STATE.get("submissions") or [])
+                net = STATE.get("net") or {}
+                slot = net.get("slot")
+            lines = []
+            for s in subs:
+                age = (slot - s["slot"]) * 10.24 if slot else None
+                lines.append("/b %-12s %s %s  slot s%s  transit %s  %s  %s" % (
+                    s["by"], s["k"], s["b"], s["slot"], s["no"],
+                    ("%.0fs ago" % age) if age is not None else "?",
+                    "CONFIRMED" if s["won"] else "lost"))
+            body = ("\n".join(lines) + "\n").encode()
+            ctype = "text/plain; charset=utf-8"
         elif self.path == "/" or self.path.startswith("/?"):
             body = (PAGE.replace("__SHORT__", HOLDER[:8])
                         .replace("__HOLDER_JSON__", json.dumps(HOLDER))

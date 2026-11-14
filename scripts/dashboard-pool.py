@@ -56,10 +56,16 @@ def pool_loop():
             reward = float(p.get("avgBlockReward") or p.get("blockReward") or 95)
             fee = float(p.get("poolFeePercent") or 0)
             lb = p.get("lastBlockFound") or {}
+            try:
+                import math
+                net_k = round(math.log2(float(ns.get("networkDifficulty") or 1)), 1)
+            except Exception:
+                net_k = None
             with LOCK:
                 STATE["pool"] = {
                     "effort": float(p.get("poolEffort") or 0) * 100,
                     "avg100": float((p.get("roundStats") or {}).get("effortAvg100") or 0) * 100,
+                    "netK": net_k,
                     "roundMiners": (p.get("roundStats") or {}).get("roundMiners"),
                     "roundShares": (p.get("roundStats") or {}).get("roundShares"),
                     "miners": ps.get("connectedMiners"),
@@ -111,13 +117,38 @@ def share_loop():
     while True:
         txt = tail(PXLOG)
         rows = []
-        for m in re.finditer(r"(\d\d:\d\d:\d\d)[^\n]*?GPU #(\d+): share accepted \((\d+)/(\d+)\)", txt):
-            rows.append({"t": m.group(1), "gpu": int(m.group(2)),
-                         "ok": int(m.group(3)), "all": int(m.group(4))})
+        cur_k = None
+        for line in txt.splitlines():
+            mk = re.search(r"k=(\d+)", line)
+            if "hash job" in line and mk:
+                cur_k = int(mk.group(1))
+                continue
+            m = re.search(r"(\d\d:\d\d:\d\d)[^\n]*?GPU #(\d+): share accepted \((\d+)/(\d+)\)", line)
+            if m:
+                rows.append({"t": m.group(1), "gpu": int(m.group(2)),
+                             "ok": int(m.group(3)), "all": int(m.group(4)), "k": cur_k})
         with LOCK:
             STATE["shares"] = rows[-14:][::-1]
             STATE["share_total"] = rows[-1]["all"] if rows else 0
+            STATE["share_k"] = rows[-1]["k"] if rows else None
         time.sleep(2)
+
+
+def balance_loop():
+    import subprocess
+    while True:
+        total = None
+        try:
+            out = subprocess.run(["proxi", "node", "balance"], cwd="/root/proxima/mine",
+                                 capture_output=True, text=True, timeout=45).stdout
+            m = re.search(r"TOTAL controlled on (\d+) outputs?: ([\d_]+)", out)
+            if m:
+                total = int(m.group(2).replace("_", "")) / 1e6
+        except Exception:
+            pass
+        with LOCK:
+            STATE["balance"] = total
+        time.sleep(60)
 
 
 PAGE = r"""<!doctype html><html lang="en"><head><meta charset="utf-8">
@@ -172,8 +203,8 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 
 <div class="panel">
   <div class="ph"><span class="k">current round progress</span><span class="n" id="efftxt">–</span></div>
-  <div class="meter"><b></b><i id="fill" style="width:0%"></i></div>
-  <div class="scale"><span>0 %</span><span>100 % = the expected work for one block</span><span>200 %</span></div>
+  <div class="meter"><b id="mark"></b><i id="fill" style="width:0%"></i></div>
+  <div class="scale"><span id="scalemin">0 %</span><span id="scalemid">100 % = the expected work for one block</span><span id="scalemax">200 %</span></div>
 </div>
 
 <div class="grid" id="kpis"></div>
@@ -188,7 +219,9 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 
 <div class="panel">
   <div class="ph"><span class="k">share submissions — this box</span><span class="n" id="shn">–</span></div>
-  <table><thead><tr><th>time</th><th>gpu</th><th style="text-align:right">accepted</th><th style="text-align:right">total</th></tr></thead>
+  <table><thead><tr><th>time</th><th>ago</th><th>gpu</th>
+  <th style="text-align:right">share k</th><th style="text-align:right">accepted</th>
+  <th style="text-align:right">total</th></tr></thead>
   <tbody id="sh"></tbody></table>
 </div>
 
@@ -222,15 +255,22 @@ async function tick() {
   try { d = await (await fetch('/data', {cache:'no-store'})).json(); } catch(e) { return }
   const p = d.pool || {}, o = d.ours;
   const eff = p.effort || 0;
-  $('fill').style.width = Math.min(eff, 200) / 200 * 100 + '%';
-  $('efftxt').textContent = eff.toFixed(2) + ' %';
-  $('fill').style.filter = eff > 200 ? 'saturate(1.4)' : '';
+  const maxScale = eff <= 200 ? 200 : Math.ceil(eff / 100) * 100;
+  $('fill').style.width = Math.min(eff, maxScale) / maxScale * 100 + '%';
+  $('mark').style.left = (100 / maxScale * 100) + '%';
+  $('efftxt').textContent = eff.toFixed(2) + ' %'
+    + (eff > 100 ? '  ·  ' + (eff / 100).toFixed(2) + '× expected' : '');
+  $('scalemax').textContent = maxScale + ' %';
+  $('scalemid').textContent = maxScale === 200
+    ? '100 % = the expected work for one block'
+    : '100 % = expected (scale 0–' + maxScale + ' %)';
   $('kpis').innerHTML = [
     kpi('expected time / block', dur(p.expected), 'acc'),
     kpi('avg effort, last 100', p.avg100 == null ? '–' : p.avg100.toFixed(1), 'warn', '%'),
     kpi('miners this round', pro(p.roundMiners)),
     kpi('shares this round', pro(p.roundShares)),
-    kpi('last pool block', pro(p.lastHeight), '', p.lastFound ? ago(p.lastFound) : ''),
+    kpi('last pool block', p.lastFound ? ago(p.lastFound) : '–'),
+    kpi('wallet balance', d.balance == null ? '–' : d.balance.toFixed(2), 'gold', 'PROX'),
     kpi('next block pays', p.net == null ? '–' : p.net.toFixed(2), 'gold', 'PROX'),
     kpi('pool hashrate', th(p.poolHashrate), '', 'TH/s'),
     kpi('pool share of network', p.share == null ? '–' : (p.share * 100).toFixed(2), '', '%'),
@@ -244,11 +284,23 @@ async function tick() {
       + '<td style="text-align:right;color:var(--faint)">' + (o.lastShare ? ago(Date.parse(o.lastShare)/1000) : '–') + '</td></tr>')
     : '<tr><td colspan="6" class="empty">our miner not visible on the pool yet</td></tr>';
   const sh = d.shares || [];
-  $('shn').textContent = d.share_total ? d.share_total + ' accepted on this box' : '';
+  $('shn').textContent = (d.share_total ? d.share_total + ' accepted on this box' : '')
+    + (d.share_k != null ? '  ·  share k=' + d.share_k : '')
+    + (p.netK != null ? '  ·  network K≈' + p.netK : '');
+  const now = new Date();
+  const agoClock = t => {
+    const [h, m, s] = t.split(':').map(Number);
+    const d0 = new Date(now); d0.setHours(h, m, s, 0);
+    let secs = (now - d0) / 1000; if (secs < 0) secs += 86400;
+    return secs < 60 ? Math.round(secs) + ' s ago' : Math.round(secs / 60) + ' min ago';
+  };
   $('sh').innerHTML = sh.map(s => '<tr><td class="mono" style="color:var(--faint)">' + s.t + '</td>'
-      + '<td>GPU #' + s.gpu + '</td><td style="text-align:right" class="good">' + s.ok + '</td>'
+      + '<td style="color:var(--dim)">' + agoClock(s.t) + '</td>'
+      + '<td>GPU #' + s.gpu + '</td>'
+      + '<td style="text-align:right;color:var(--warn)">' + (s.k == null ? '–' : s.k) + '</td>'
+      + '<td style="text-align:right" class="good">' + s.ok + '</td>'
       + '<td style="text-align:right;color:var(--dim)">' + s.all + '</td></tr>').join('')
-    || '<tr><td colspan="4" class="empty">no shares in the log</td></tr>';
+    || '<tr><td colspan="6" class="empty">no shares in the log</td></tr>';
   const bl = d.blocks || [];
   $('bln').textContent = bl.length ? 'last ' + bl.length : '';
   $('bl').innerHTML = bl.map(b => '<tr><td class="mono">#' + b.height + '</td>'
@@ -288,7 +340,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    for fn in (pool_loop, miners_loop, blocks_loop, share_loop):
+    for fn in (pool_loop, miners_loop, blocks_loop, share_loop, balance_loop):
         threading.Thread(target=fn, daemon=True).start()
     time.sleep(1)
     print("pool dashboard on http://0.0.0.0:%d for %s" % (PORT, ADDR), flush=True)
