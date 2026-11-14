@@ -55,18 +55,12 @@ def log_loop():
         # the miner's log grows through the run; keep enough of it to see every
         # transit we confirmed (read() seeks, so a big window is cheap)
         mine = read(os.path.join(MINE, "mine.log"), n=8_000_000)
-        wins = 0
-        if os.path.isdir(MINE):
-            for g in os.listdir(MINE):
-                if g.startswith("gpu") and g.endswith(".log"):
-                    wins += read(os.path.join(MINE, g)).count("ACCEPTED")
         with LOCK:
             STATE["hashrate"] = last(r"([\d_]+) H/s", mine, num)
             STATE["transit"] = last(r"mining transit #(\d+)", mine, int)
             STATE["k"] = last(r"mining transit #\d+[^\n]*?difficulty K=(\d+)", mine, int)
             STATE["target_slot"] = last(r"mining transit #\d+[^\n]*?target slot (\d+)", mine, int)
             STATE["attempts"] = last(r"mining\.\.\. ([\d_]+) attempts", mine, num)
-            STATE["wins"] = wins
             # our own confirmed transits, newest first: "#201579 226877-80-020982ba386c.."
             ours = []
             for m in re.finditer(r"confirmed transit #(\d+) (\d{6}-\d+-[0-9a-f]+)[^\n]*?\((\d+) of ours\)", mine):
@@ -74,6 +68,10 @@ def log_loop():
             STATE["our_transits"] = ours[-6:][::-1]
             STATE["confirmed"] = len(ours)
             STATE["minted"] = len(ours) * 95_000_000     # 95 PROX per transit
+            # "our transits" counts ledger confirmations: the seeker-specific ACCEPTED
+            # lines stopped existing when the box moved to a single-process miner
+            STATE["wins"] = len(ours)
+            STATE["solved"] = len(re.findall(r"SOLVED transit #", mine))
         time.sleep(1)
 
 
