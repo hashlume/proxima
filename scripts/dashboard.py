@@ -25,8 +25,7 @@ STATE = {"seekers": [], "history": [], "net": {}, "wallet": {}}
 LOCK = threading.Lock()
 HOLDER = "?"
 TOKEN = ""
-PREV = {}   # name -> (cumulative attempts, wall clock)
-RATE = {}   # name -> smoothed attempts/s, computed here rather than trusting the miner's EWMA
+PREV = {}   # name -> deque of (wall clock, cumulative attempts) over the last ~30 s
 
 
 def read(path, n=400_000):
@@ -86,23 +85,20 @@ def stats_loop():
                     age_ms = s.get("age_ms") or 0
                     if age_ms > 30_000:        # a seeker that stopped reporting
                         continue
-                    prev = PREV.get(name)
-                    rate = RATE.get(name, 0.0)
-                    if prev:
-                        dt = now - prev[1]
-                        if att < prev[0]:      # the miner restarted: counters reset
-                            rate = 0.0
-                        elif dt > 0.2:
-                            inst = (att - prev[0]) / dt
-                            # one huge sample is the backlog a seeker dumps after the
-                            # miner was down; don't let it dominate the view
-                            if rate > 0 and inst > rate * 3:
-                                inst = rate * 3
-                            rate = rate * 0.5 + inst * 0.5 if rate > 0 else inst
-                    PREV[name] = (att, now)
+                    # rate over a sliding ~30 s window of the seeker's own cumulative
+                    # attempts: immune to the miner's EWMA spikes and to idle gaps
+                    hist = PREV.setdefault(name, [])
+                    hist.append((now, att))
+                    while len(hist) > 2 and now - hist[0][0] > 30:
+                        hist.pop(0)
+                    rate = 0.0
+                    if len(hist) >= 2:
+                        dt = hist[-1][0] - hist[0][0]
+                        datt = hist[-1][1] - hist[0][1]
+                        if dt > 1 and datt >= 0:
+                            rate = datt / dt
                     if age_ms > 6000:          # silent: stopped hashing
                         rate = 0.0
-                    RATE[name] = rate
                     rows.append({"name": name, "hashrate": rate, "attempts": att, "age_ms": age_ms})
                 total = sum(x["hashrate"] for x in rows)
                 rows.sort(key=lambda x: x["hashrate"], reverse=True)
@@ -156,7 +152,11 @@ def balance_loop():
             if m:
                 outputs = int(m.group(1))
                 total = int(m.group(2).replace("_", "")) / 1e6
-            delegations = 0 if "NO DELEGATIONS" in out else len(re.findall(r"^\s+\S*delegation", out, re.M))
+            dm = re.search(r"DELEGATIONS \((\d+)\)", out)
+            if dm:
+                delegations = int(dm.group(1))
+            elif "NO DELEGATIONS" in out:
+                delegations = 0
         except Exception:
             pass
         with LOCK:
