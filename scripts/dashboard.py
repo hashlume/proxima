@@ -61,10 +61,17 @@ def log_loop():
             STATE["k"] = last(r"mining transit #\d+[^\n]*?difficulty K=(\d+)", mine, int)
             STATE["target_slot"] = last(r"mining transit #\d+[^\n]*?target slot (\d+)", mine, int)
             STATE["attempts"] = last(r"mining\.\.\. ([\d_]+) attempts", mine, num)
+            # who found each submitted transit: "SOLVED transit #202617; submitting 228031-... from O-2440051"
+            found = {}
+            for m in re.finditer(r"(?:SOLVED|IMPROVED) transit #(\d+); submitting \S+(?: from (\S+))?", mine):
+                if m.group(2):
+                    found[int(m.group(1))] = m.group(2)
             # our own confirmed transits, newest first: "#201579 226877-80-020982ba386c.."
             ours = []
             for m in re.finditer(r"confirmed transit #(\d+) (\d{6}-\d+-[0-9a-f]+)[^\n]*?\((\d+) of ours\)", mine):
-                ours.append({"no": int(m.group(1)), "txid": m.group(2), "slot": int(m.group(2).split("-")[0])})
+                no = int(m.group(1))
+                ours.append({"no": no, "txid": m.group(2), "slot": int(m.group(2).split("-")[0]),
+                             "by": found.get(no, "")})
             STATE["our_transits"] = ours[-6:][::-1]
             STATE["confirmed"] = len(ours)
             STATE["minted"] = len(ours) * 95_000_000     # 95 PROX per transit
@@ -286,7 +293,7 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
     <div class="card"><div class="k">minted this run</div><div class="v" id="minted">–</div></div>
     <div class="card"><div class="k">our share of network</div><div class="v" id="share">–</div></div>
   </div>
-  <table><thead><tr><th>slot</th><th>transit</th><th>when</th><th>tx</th></tr></thead>
+  <table><thead><tr><th>slot</th><th>transit</th><th>when</th><th>found by</th><th>tx</th></tr></thead>
   <tbody id="tb"></tbody></table>
 </div>
 
@@ -396,8 +403,9 @@ async function tick() {
       const ageS = (net.slot && t.slot) ? (net.slot - t.slot) * 10.24 : null;
       return '<tr><td>s' + t.slot + '</td><td>' + t.no + '</td>'
         + '<td style="color:var(--dim)">' + (ageS == null ? '–' : agoS(ageS)) + '</td>'
+        + '<td class="name" style="color:var(--acc)">' + (t.by || '–') + '</td>'
         + '<td class="name" style="color:var(--good)">' + t.txid.slice(0, 22) + '…</td></tr>';
-    }).join('') || '<tr><td colspan="4" class="empty">nothing mined yet</td></tr>';
+    }).join('') || '<tr><td colspan="5" class="empty">nothing mined yet</td></tr>';
   $('ts').textContent = new Date().toLocaleTimeString();
   $('upd').textContent = 'live';
 }

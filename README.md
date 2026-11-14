@@ -47,7 +47,9 @@ machine (`gpu3@host`), a total sparkline, our transits, wallet, difficulty/ETA a
 transits of the mine chain.
 
 Per-seeker numbers come from `GET /seeker/stats`, a small read-only endpoint added to the
-miner (`patches/0001-miner-seeker-stats-endpoint.patch`). Build it like this:
+miner (`patches/0001-miner-seeker-stats-endpoint.patch`). The "found by" column of our
+transits comes from `patches/0002-transit-attribution.patch`, which makes the miner print
+which seeker supplied the winning nonce. Build it like this:
 
 ```bash
 git clone --depth 1 --branch v1.6.3p1 https://github.com/lunfardo314/proxima.git
