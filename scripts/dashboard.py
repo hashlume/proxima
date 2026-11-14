@@ -52,7 +52,9 @@ def num(s):
 
 def log_loop():
     while True:
-        mine = read(os.path.join(MINE, "mine.log"))
+        # the miner's log grows through the run; keep enough of it to see every
+        # transit we confirmed (read() seeks, so a big window is cheap)
+        mine = read(os.path.join(MINE, "mine.log"), n=8_000_000)
         wins = 0
         if os.path.isdir(MINE):
             for g in os.listdir(MINE):
@@ -65,6 +67,13 @@ def log_loop():
             STATE["target_slot"] = last(r"mining transit #\d+[^\n]*?target slot (\d+)", mine, int)
             STATE["attempts"] = last(r"mining\.\.\. ([\d_]+) attempts", mine, num)
             STATE["wins"] = wins
+            # our own confirmed transits, newest first: "#201579 226877-80-020982ba386c.."
+            ours = []
+            for m in re.finditer(r"confirmed transit #(\d+) (\d{6}-\d+-[0-9a-f]+)[^\n]*?\((\d+) of ours\)", mine):
+                ours.append({"no": int(m.group(1)), "txid": m.group(2), "slot": int(m.group(2).split("-")[0])})
+            STATE["our_transits"] = ours[-6:][::-1]
+            STATE["confirmed"] = len(ours)
+            STATE["minted"] = len(ours) * 95_000_000     # 95 PROX per transit
         time.sleep(1)
 
 
@@ -180,6 +189,9 @@ def snapshot():
             s["net_share"] = h / per_s
         except Exception:
             pass
+    if net.get("mean_pace") and s.get("net_share"):
+        # one transit per mean_pace slots, 95 PROX each, in proportion to our share
+        s["prox_per_day"] = (86400.0 / (net["mean_pace"] * 10.24)) * s["net_share"] * 95.0
     return s
 
 
@@ -270,8 +282,13 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 </div>
 
 <div class="panel">
-  <div class="ph"><span class="k">mine chain</span><span class="n" id="mhs">–</span></div>
-  <table><thead><tr><th>slot</th><th>difficulty</th><th>miner</th></tr></thead>
+  <div class="ph"><span class="k">earnings</span><span class="n" id="earnsub">–</span></div>
+  <div class="grid" style="margin:0 0 12px">
+    <div class="card"><div class="k">est. PROX / day</div><div class="v gold" id="ppd">–</div></div>
+    <div class="card"><div class="k">minted this run</div><div class="v" id="minted">–</div></div>
+    <div class="card"><div class="k">our share of network</div><div class="v" id="share">–</div></div>
+  </div>
+  <table><thead><tr><th>slot</th><th>transit</th><th>tx</th></tr></thead>
   <tbody id="tb"></tbody></table>
 </div>
 
@@ -358,20 +375,26 @@ async function tick() {
     kpi('difficulty', job.k != null ? job.k : (d.k != null ? d.k : '–'), 'warn', 'bits'),
     kpi('network share', d.net_share == null ? '–' : (d.net_share*100).toFixed(2), '', '%'),
     kpi('job slot', job.slot != null ? job.slot : (d.target_slot != null ? d.target_slot : '–'), 'acc'),
-    kpi('mine chain', pro(net.mined), '', 'transits'),
+    kpi('network transits', pro(net.mined), '', 'mined'),
     kpi('remaining', pro(Math.round(net.remaining||0)), '', 'PROX'),
     kpi('miners / 120 slots', pro(net.miners)),
     kpi('network pace', net.mean_pace == null ? '–' : Number(net.mean_pace).toFixed(2), '', 'slots'),
   ].join('');
   renderSeekers(d);
   drawSpark(d.history);
-  $('mhs').textContent = net.mined_last_hour ? net.mined_last_hour + ' mined in the last hour' : '';
-  $('tb').innerHTML = (net.transits || []).map(t => {
-    const ours = t.miner === HOLDER;
-    return '<tr><td>s' + t.slot + '</td><td>' + t.difficulty + '</td>'
-      + '<td class="' + (ours ? 'mine' : '') + '">'
-      + (ours ? 'OURS' : (t.miner||'').slice(0,14) + '…') + '</td></tr>';
-  }).join('') || '<tr><td colspan="3" class="empty">no data</td></tr>';
+  $('ppd').innerHTML = d.prox_per_day == null ? '–'
+    : Math.round(d.prox_per_day).toLocaleString() + ' <small>PROX</small>';
+  $('minted').innerHTML = d.minted == null ? '–'
+    : (d.minted / 1e6).toFixed(2) + ' <small>PROX</small>';
+  $('share').textContent = d.net_share == null ? '–' : (d.net_share * 100).toFixed(2) + '%';
+  const ours = d.our_transits || [];
+  $('earnsub').textContent = ours.length
+    ? ours.length + ' confirmed transit' + (ours.length > 1 ? 's' : '') + ' of ours'
+    : 'no transit won yet';
+  $('tb').innerHTML = ours.map(t =>
+      '<tr><td>s' + t.slot + '</td><td>' + t.no + '</td>'
+      + '<td class="name" style="color:var(--good)">' + t.txid.slice(0, 22) + '…</td></tr>'
+    ).join('') || '<tr><td colspan="3" class="empty">nothing mined yet</td></tr>';
   $('ts').textContent = new Date().toLocaleTimeString();
   $('upd').textContent = 'live';
 }
