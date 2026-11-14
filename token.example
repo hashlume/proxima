@@ -1,0 +1,6 @@
+# Put the miner's mine.seeker.token here. This file is gitignored.
+# Copy to /root/proxima/token on a seeker box, or pass it to bootstrap-seeker.sh:
+#   ./bootstrap-seeker.sh <token>
+#
+# Get it from the miner:
+#   sed -n 's/^        token: //p' /root/proxima/mine/proxi.yaml

@@ -1,0 +1,16 @@
+# secrets — never commit
+token
+*.key
+proxima.key
+id_ed25519*
+seeker_id*
+
+# runtime
+*.log
+*.out
+*.err
+
+# os noise
+Thumbs.db
+.DS_Store
+desktop.ini
