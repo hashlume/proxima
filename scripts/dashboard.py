@@ -84,7 +84,7 @@ def stats_loop():
                     name = s.get("name") or "?"
                     att = s.get("attempts") or 0
                     age_ms = s.get("age_ms") or 0
-                    if age_ms > 60_000:        # a seeker that stopped reporting
+                    if age_ms > 30_000:        # a seeker that stopped reporting
                         continue
                     prev = PREV.get(name)
                     rate = RATE.get(name, 0.0)
@@ -222,6 +222,7 @@ font-weight:600;padding:0 8px 7px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid rgba(34,40,54,.55);font-size:13px}
 tr:last-child td{border-bottom:none}
 .name{font-family:ui-monospace,Consolas,monospace;font-size:12.5px}
+.dim{color:var(--faint);font-weight:400}
 .bar{height:6px;border-radius:3px;background:#1d2330;overflow:hidden;min-width:70px}
 .bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#2b6cb0,#48d38a)}
 .host td{font-weight:600;padding-top:11px;padding-bottom:6px;color:var(--ink);background:var(--panel2)}
@@ -263,9 +264,9 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
 
 <div class="panel">
   <div class="ph"><span class="k">seekers</span><span class="n" id="sksum">–</span></div>
-  <table><thead><tr><th>machine / device</th><th style="width:34%">share</th>
+  <table><thead><tr><th>device</th><th style="width:40%">share</th>
   <th style="text-align:right">hashrate</th><th style="text-align:right">of total</th>
-  <th style="text-align:right">last report</th></tr></thead><tbody id="sks"></tbody></table>
+  </tr></thead><tbody id="sks"></tbody></table>
 </div>
 
 <div class="panel">
@@ -307,44 +308,38 @@ function drawSpark(h) {
 }
 
 function renderSeekers(d) {
-  const list = (d.seekers || []).slice().sort((a,b) => (b.hashrate||0) - (a.hashrate||0));
-  const total = d.seekers_total || list.reduce((s,x) => s + (x.hashrate||0), 0);
-  $('sksum').textContent = list.length
-    ? list.length + ' device' + (list.length > 1 ? 's' : '') + ' · ' + gh(total) + ' GH/s'
-    : (d.stats_ok === false ? 'per-seeker stats unavailable on this miner build' : 'none connected');
-  if (!list.length) {
-    $('sks').innerHTML = '<tr><td colspan="5" class="empty">no seekers reporting</td></tr>';
-    return;
-  }
-  const groups = new Map();
+  const list = d.seekers || [];
+  const byHost = new Map();
   for (const s of list) {
     const parts = (s.name || '?').split('@');
     const host = parts.length > 1 ? parts[1] : parts[0];
-    const dev  = parts.length > 1 ? parts[0] : '—';
-    if (!groups.has(host)) groups.set(host, []);
-    groups.get(host).push(Object.assign({}, s, {dev: dev}));
+    const g = byHost.get(host) || {host: host, rate: 0, n: 0, age: 1e9};
+    g.rate += s.hashrate || 0;
+    g.n += 1;
+    g.age = Math.min(g.age, s.age_ms || 0);
+    byHost.set(host, g);
   }
-  const max = Math.max.apply(null, list.map(x => x.hashrate || 0).concat([1]));
-  const hosts = [...groups.entries()].sort((a,b) =>
-    b[1].reduce((s,x)=>s+(x.hashrate||0),0) - a[1].reduce((s,x)=>s+(x.hashrate||0),0));
+  const rows = [...byHost.values()].sort((a,b) => b.rate - a.rate);
+  const total = rows.reduce((s,x) => s + x.rate, 0);
+  $('sksum').textContent = rows.length
+    ? rows.length + ' device' + (rows.length > 1 ? 's' : '') + ' · ' + gh(total) + ' GH/s'
+    : (d.stats_ok === false ? 'per-seeker stats unavailable on this miner build' : 'none connected');
+  if (!rows.length) {
+    $('sks').innerHTML = '<tr><td colspan="4" class="empty">no seekers reporting</td></tr>';
+    return;
+  }
+  const max = Math.max.apply(null, rows.map(x => x.rate).concat([1]));
   let html = '';
-  for (const [host, rows] of hosts) {
-    const sub = rows.reduce((s,x) => s + (x.hashrate||0), 0);
-    html += '<tr class="host"><td colspan="2">' + host + '</td>'
-      + '<td style="text-align:right">' + gh(sub) + ' GH/s</td>'
-      + '<td style="text-align:right">' + (total ? (sub/total*100).toFixed(1) : '–') + '%</td>'
-      + '<td></td></tr>';
-    for (const r of rows) {
-      const pct = (r.hashrate || 0) / max * 100;
-      const st = (r.age_ms||0) < 5000 ? 'on' : ((r.age_ms||0) < 20000 ? 'slow' : 'off');
-      html += '<tr>'
-        + '<td class="name"><span class="st ' + st + '"></span>' + r.dev + '</td>'
-        + '<td><div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div></td>'
-        + '<td style="text-align:right">' + gh(r.hashrate) + ' GH/s</td>'
-        + '<td style="text-align:right;color:var(--dim)">'
-        + (total ? (r.hashrate/total*100).toFixed(1) : '–') + '%</td>'
-        + '<td style="text-align:right;color:var(--faint)">' + age(r.age_ms) + '</td></tr>';
-    }
+  for (const r of rows) {
+    const pct = r.rate / max * 100;
+    const st = r.age < 5000 ? 'on' : (r.age < 20000 ? 'slow' : 'off');
+    html += '<tr>'
+      + '<td class="name"><span class="st ' + st + '"></span>' + r.host
+      + ' <span class="dim">· ' + r.n + ' GPU' + (r.n > 1 ? 's' : '') + '</span></td>'
+      + '<td><div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div></td>'
+      + '<td style="text-align:right">' + gh(r.rate) + ' GH/s</td>'
+      + '<td style="text-align:right;color:var(--dim)">'
+      + (total ? (r.rate/total*100).toFixed(1) : '–') + '%</td></tr>';
   }
   $('sks').innerHTML = html;
 }
