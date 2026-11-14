@@ -29,7 +29,11 @@ nvidia-smi --query-gpu=index,name,compute_cap,memory.total --format=csv,noheader
 cap=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | tr -d ' ')
 
 mkdir -p "$SEEK"
-install -m 755 "$HERE/seeker/gpu_seeker.py" "$SEEK/gpu_seeker.py"
+if [ "$HERE" = "$DEST" ]; then
+  chmod 755 "$SEEK/gpu_seeker.py"   # cloned straight into the install dir
+else
+  install -m 755 "$HERE/seeker/gpu_seeker.py" "$SEEK/gpu_seeker.py"
+fi
 
 lib=""
 case "$cap" in
@@ -39,7 +43,11 @@ esac
 
 if [ -n "$lib" ] && [ -f "$HERE/seeker/$lib" ]; then
   say "compute_cap $cap -> using prebuilt $lib"
-  install -m 755 "$HERE/seeker/$lib" "$SEEK/libb2s.so"
+  if [ "$HERE" = "$DEST" ]; then
+    cp -f "$HERE/seeker/$lib" "$SEEK/libb2s.so"; chmod 755 "$SEEK/libb2s.so"
+  else
+    install -m 755 "$HERE/seeker/$lib" "$SEEK/libb2s.so"
+  fi
 else
   arch="sm_$(echo "$cap" | tr -d '.')"
   say "compute_cap $cap -> no prebuilt library, building $arch"
@@ -116,5 +124,28 @@ chmod +x "$DEST/watchdog.sh"
 sleep 8
 say "started:"
 screen -ls | sed -n '2,10p'
+
+# survive a reboot / dead seeker without anyone logged in
+if command -v supervisorctl >/dev/null 2>&1; then
+  cat > /etc/supervisor/conf.d/proxima.conf <<EOF
+[program:proxima]
+command=/bin/bash $DEST/watchdog.sh
+directory=$DEST
+autostart=true
+autorestart=true
+startsecs=5
+stopasgroup=true
+killasgroup=true
+stdout_logfile=$DEST/supervisor.log
+stderr_logfile=$DEST/supervisor.err.log
+EOF
+  supervisorctl reread >/dev/null 2>&1 || true
+  supervisorctl update >/dev/null 2>&1 || true
+  sleep 3
+  say "supervisor: $(supervisorctl status 2>/dev/null | grep proxima || echo 'not registered')"
+else
+  say "no supervisorctl: screens run until the container restarts (see NEW-GPU-QUICKSTART.md §5)"
+fi
+
 say "check: tail -3 $DEST/gpu0.log"
 say "miner: $URL"
