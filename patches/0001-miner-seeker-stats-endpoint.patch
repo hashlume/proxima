@@ -1,0 +1,67 @@
+diff --git a/proxi/node_cmd/mine/mine_seeker.go b/proxi/node_cmd/mine/mine_seeker.go
+index 7b9b29d..bdc02a1 100644
+--- a/proxi/node_cmd/mine/mine_seeker.go
++++ b/proxi/node_cmd/mine/mine_seeker.go
+@@ -147,6 +147,7 @@ func (s *seekerServer) handler() http.Handler {
+ 	mux.HandleFunc("/seeker/job", s.auth(s.handleJob))
+ 	mux.HandleFunc("/seeker/result", s.auth(s.handleResult))
+ 	mux.HandleFunc("/seeker/report", s.auth(s.handleReport))
++	mux.HandleFunc("/seeker/stats", s.auth(s.handleStats))
+ 	return mux
+ }
+ 
+@@ -301,6 +302,54 @@ func (s *seekerServer) handleJob(w http.ResponseWriter, r *http.Request) {
+ 	}
+ }
+ 
++// seekerStatView is one seeker as /seeker/stats reports it.
++type seekerStatView struct {
++	Name     string  `json:"name"`
++	Hashrate float64 `json:"hashrate"`
++	Attempts uint64  `json:"attempts"`
++	AgeMs    int64   `json:"age_ms"`
++}
++
++// seekerStatsView is the answer of GET /seeker/stats.
++type seekerStatsView struct {
++	JobID         uint64           `json:"job_id"`
++	Slot          uint32           `json:"slot"`
++	K             int              `json:"k"`
++	TTLMs         int64            `json:"ttl_ms"`
++	TotalHashrate float64          `json:"total_hashrate"`
++	Seekers       []seekerStatView `json:"seekers"`
++}
++
++// handleStats answers GET /seeker/stats: what each connected seeker last
++// reported, for dashboards. Read-only, behind the same token as the rest.
++func (s *seekerServer) handleStats(w http.ResponseWriter, r *http.Request) {
++	if r.Method != http.MethodGet {
++		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "GET only"})
++		return
++	}
++	now := time.Now()
++	s.mu.Lock()
++	out := seekerStatsView{
++		JobID:   s.job.ID,
++		Slot:    s.slot,
++		K:       s.k,
++		TTLMs:   s.deadline.Sub(now).Milliseconds(),
++		Seekers: make([]seekerStatView, 0, len(s.seekers)),
++	}
++	for name, st := range s.seekers {
++		out.Seekers = append(out.Seekers, seekerStatView{
++			Name:     name,
++			Hashrate: st.hashrate,
++			Attempts: st.attempts,
++			AgeMs:    now.Sub(st.lastSeen).Milliseconds(),
++		})
++		out.TotalHashrate += st.hashrate
++	}
++	s.mu.Unlock()
++	sort.Slice(out.Seekers, func(i, j int) bool { return out.Seekers[i].Hashrate > out.Seekers[j].Hashrate })
++	writeJSON(w, http.StatusOK, out)
++}
++
+ // handleResult verifies a seeker's nonce against the current job and, when it
+ // holds and beats the job's beat, completes the proof and hands it to the
+ // round. The job stays open either way; the answer carries the beat a further

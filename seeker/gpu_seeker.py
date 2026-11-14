@@ -131,7 +131,10 @@ class Miner:
 
 def run(url, token):
     miner = Miner(url, token)
-    name = "gpu@" + os.uname().nodename
+    # one name per card when the launcher pins a device, so a dashboard can show
+    # each GPU separately; CUDA_VISIBLE_DEVICES=3 -> "gpu3@host"
+    dev = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")[0].strip()
+    name = ("gpu%s@%s" % (dev, os.uname().nodename)) if dev else ("gpu@" + os.uname().nodename)
     job, lock = {"id": 0}, threading.Lock()
 
     def poll():
@@ -152,6 +155,7 @@ def run(url, token):
     threading.Thread(target=poll, daemon=True).start()
     # unreported: attempts since the last report or result, which is what the miner counts
     current, dead, unreported, last_report = 0, 0, 0, time.time()
+    deadline = 0.0
     while True:
         with lock:
             j = dict(job)
@@ -170,7 +174,14 @@ def run(url, token):
             beat = bytes.fromhex(j.get("beat") or "")
             setup(message, k)
             start = random.getrandbits(62)
+            ttl = j.get("ttl_ms") or 0
+            deadline = time.time() + ttl / 1000.0 if ttl > 0 else 0.0
             print("job %d: slot %d, K %d, message %d bytes%s" % (current, j.get("slot", 0), k, len(message), ", contested" if beat else ""))
+        # a job past its ttl is settled: hashing it burns power for nothing, and a
+        # miner that is down cannot replace it, so idle until a new one arrives
+        if deadline and time.time() > deadline:
+            time.sleep(0.2)
+            continue
         nonces, a = search(start)
         start += a; unreported += a
         best = None
@@ -179,8 +190,12 @@ def run(url, token):
             if tz >= k and (not beat or key < beat) and (best is None or key < best[2]):
                 best = (x, s, key)
         if best:
-            code, v = miner.call("/seeker/result", {"id": current, "nonce": struct.pack(">Q", best[0]).hex(),
-                                                    "beta": best[1].hex(), "attempts": unreported, "seeker": name})
+            try:
+                code, v = miner.call("/seeker/result", {"id": current, "nonce": struct.pack(">Q", best[0]).hex(),
+                                                       "beta": best[1].hex(), "attempts": unreported, "seeker": name})
+            except Exception:  # miner down or restarting: never kill the search loop over it
+                time.sleep(0.5)
+                continue
             unreported = 0
             if code == 200:
                 beat = bytes.fromhex(v.get("beat") or "") or best[2]
@@ -190,7 +205,10 @@ def run(url, token):
             else:
                 print("  result refused: HTTP %d %s" % (code, v))
         if time.time() - last_report > 1:
-            code, _ = miner.call("/seeker/report", {"id": current, "attempts": unreported, "seeker": name}, timeout=5)
+            try:
+                code, _ = miner.call("/seeker/report", {"id": current, "attempts": unreported, "seeker": name}, timeout=5)
+            except Exception:
+                code = 0
             if code == 200:
                 unreported = 0
             last_report = time.time()

@@ -11,9 +11,26 @@ git clone <this repo> proxima-kit && cd proxima-kit
 ```
 
 That checks the cards, picks the prebuilt library for the arch (or builds one), runs the
-self-test, writes `/root/proxima/{seeker,start.sh,watchdog.sh,token}` and starts one seeker
-per GPU against `http://n1.de.clorecloud.net:1855`. Options:
-`./bootstrap-seeker.sh <TOKEN> <MINER_URL>`.
+self-test, writes `/root/proxima/{seeker,start.sh,watchdog.sh,token}`, registers the
+supervisor watchdog and starts one seeker per GPU against
+`http://n1.de.clorecloud.net:1855`. Options: `./bootstrap-seeker.sh <TOKEN> <MINER_URL>`.
+
+## Dashboard
+
+`scripts/dashboard.py` serves a live page on `:8080` with per-seeker hashrate grouped by
+machine (`gpu3@host`), a total sparkline, our transits, wallet, difficulty/ETA and the last
+transits of the mine chain.
+
+Per-seeker numbers come from `GET /seeker/stats`, a small read-only endpoint added to the
+miner (`patches/0001-miner-seeker-stats-endpoint.patch`). Build it like this:
+
+```bash
+git clone --depth 1 --branch v1.6.3p1 https://github.com/lunfardo314/proxima.git
+cd proxima && git apply /path/to/0001-miner-seeker-stats-endpoint.patch
+GOAMD64=v1 CGO_ENABLED=0 go build -buildvcs=false -o proxi ./proxi
+```
+
+Without the patch the dashboard still works, it just says "per-seeker stats unavailable".
 
 The token is not in this repo. Get it from the miner:
 `sed -n 's/^        token: //p' /root/proxima/mine/proxi.yaml`.
