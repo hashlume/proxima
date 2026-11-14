@@ -351,12 +351,6 @@ a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
   <th>result</th></tr></thead><tbody id="subs"></tbody></table>
 </div>
 
-<div class="panel">
-  <div class="ph"><span class="k">submission log</span><span class="n" id="logsub">/log</span></div>
-  <pre id="sublog" style="margin:0;font-family:ui-monospace,Consolas,monospace;font-size:12px;
-  line-height:1.6;color:var(--ink);white-space:pre-wrap;overflow-x:auto"></pre>
-</div>
-
 <div class="foot">
   <span>refreshed <b id="ts">–</b></span>
   <a href="/data">/data</a>
@@ -482,14 +476,6 @@ async function tick() {
   }
   const subs = d.submissions || [];
   $('subn').textContent = subs.length ? 'last ' + subs.length : '';
-  $('sublog').textContent = subs.map(s => {
-      const a = (net.slot && s.slot) ? (net.slot - s.slot) * 10.24 : null;
-      const pad = (v, w) => String(v == null ? '–' : v).padEnd(w);
-      return '/b ' + pad(s.by, 12) + ' ' + pad(s.k, 2) + ' ' + pad(s.b, 2)
-        + '  slot s' + s.slot + '  transit ' + s.no
-        + '  ' + (a == null ? '?' : (a < 90 ? Math.round(a) + 's' : (a / 60).toFixed(0) + 'm')) + ' ago'
-        + '  ' + (s.won ? 'CONFIRMED' : 'lost');
-    }).join('\n') || 'no submissions yet';
   $('subs').innerHTML = subs.map(s => {
       const a = (net.slot && s.slot) ? (net.slot - s.slot) * 10.24 : null;
       return '<tr><td>s' + s.slot + '</td><td style="color:var(--dim)">' + (a == null ? '–' : agoS(a)) + '</td>'
