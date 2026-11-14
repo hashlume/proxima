@@ -359,8 +359,7 @@ function renderSeekers(d) {
     const pct = r.rate / max * 100;
     const st = r.age < 5000 ? 'on' : (r.age < 20000 ? 'slow' : 'off');
     html += '<tr>'
-      + '<td class="name"><span class="st ' + st + '"></span>' + r.host
-      + ' <span class="dim">· ' + r.n + ' GPU' + (r.n > 1 ? 's' : '') + '</span></td>'
+      + '<td class="name"><span class="st ' + st + '"></span>' + r.host + '</td>'
       + '<td><div class="bar"><i style="width:' + pct.toFixed(1) + '%"></i></div></td>'
       + '<td style="text-align:right">' + gh(r.rate) + ' GH/s</td>'
       + '<td style="text-align:right;color:var(--dim)">'
