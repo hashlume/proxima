@@ -15,6 +15,31 @@ self-test, writes `/root/proxima/{seeker,start.sh,watchdog.sh,token}`, registers
 supervisor watchdog and starts one seeker per GPU against
 `http://n1.de.clorecloud.net:1855`. Options: `./bootstrap-seeker.sh <TOKEN> <MINER_URL>`.
 
+## ProxiChorizo — faster third-party kernel (tested)
+
+`ocminer/ProxiChorizo` (suprnova) speaks the same version-2 nonce-seeker protocol, so it can
+replace `gpu_seeker.py` against our own miner — no pool, no key:
+
+```bash
+./proxichorizo --proxi http://n1.de.clorecloud.net:1855 --token <token> --name <box>
+```
+
+Measured on the same 8× CMP 50HX box, our reference seeker stopped, 10 s runs:
+
+| | GH/s | per card | power |
+|---|---|---|---|
+| reference `gpu_seeker.py` | 18.8 | 2.35 | 1,369 W |
+| ProxiChorizo 2.0.2 | 22.3 (25.0 by the miner's count) | 2.79–3.1 | 819 W |
+
+Linux tarball is 118 MB, needs glibc ≥ 2.29, and ships sm_75/80/86/89/90/120 kernels, so
+CMP 50HX (75), CMP 90HX and RTX 30xx (86) work out of the box. `scripts/switch-to-px.sh`
+installs it on a seeker box and rewrites `start.sh`; `scripts/switch-primary-to-px.sh` does
+the same on the miner box while keeping `mine`, `cons` and `dash`. Both keep the old
+launcher as `start-gpu_seeker.sh` for a one-command rollback.
+
+Trade-off: it is a third-party binary that receives the job token. Use a dedicated
+`mine.seeker.token` you can rotate, and run it only from the trusted release.
+
 ## Dashboard
 
 `scripts/dashboard.py` serves a live page on `:8080` with per-seeker hashrate grouped by
